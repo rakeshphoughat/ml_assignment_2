@@ -23,11 +23,17 @@ c. Models Used
 The following six machine learning models were implemented:
 
 Logistic Regression
+
 Decision Tree
+
 K-Nearest Neighbors (KNN)
+
 Gaussian Naive Bayes
+
 Random Forest (Ensemble)
+
 XGBoost (Ensemble)
+
 Each model was trained using an 80-20 train-test split with stratified sampling
 
 Model Comparison Table :
