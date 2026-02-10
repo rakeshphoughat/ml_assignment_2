@@ -102,6 +102,17 @@ with tab_eval:
             "Upload a CSV file with features + a 'target' column (0/1).",
             type=["csv"]
         )
+            # Download sample CSV button
+    sample_path = os.path.join(BASE_DIR, "breast_cancer_test.csv")
+    if os.path.exists(sample_path):
+        with open(sample_path, "rb") as f:
+            st.download_button(
+                label="⬇ Download Sample CSV",
+                data=f,
+                file_name="breast_cancer_sample.csv",
+                mime="text/csv"
+            )
+
         show_cm = st.checkbox("Show confusion matrix", value=True)
         show_report = st.checkbox("Show classification report", value=False)
 
