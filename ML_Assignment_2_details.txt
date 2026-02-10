@@ -1,0 +1,347 @@
+Please make sure of the following while uploading Assignment 2.
+
+Upload your test data .csv file in the github and give a quick download link in streamlit also to test your implementations.
+For model file,upload .py or .ipynb file for the purpose of evaluation. Optionallly you can upload the pkl files.
+sklearn built in models can be used.
+The assignment should be performed in the BITS Virtual lab and the screenshots of lab interface should also be uploaded.
+
+
+Got it. Here’s a complete, ready-to-use plan + starter code structure for your ML Assignment 2 (6 models + metrics + Streamlit app + deployable repo). You can copy this into your BITS Virtual Lab + GitHub repo and customize with your dataset.
+
+1) Choose a dataset that meets constraints
+
+You need classification, ≥ 12 features, ≥ 500 rows.
+
+Safe options (easy + common):
+
+UCI Breast Cancer Wisconsin (Diagnostic) (30 features, 569 rows, binary)
+
+UCI Wine Quality (11 features only ❌ not enough)
+
+UCI Adult Income (many features, > 500 rows, binary)
+
+Kaggle Heart / Stroke datasets (check features/rows)
+
+Best for smooth deployment: Breast Cancer (already available in sklearn.datasets → no downloading issues).
+
+2) What your repo should look like
+project-folder/
+│-- app.py
+│-- requirements.txt
+│-- README.md
+│-- model/
+│   ├── train_models.py
+│   ├── utils.py
+│   └── saved/   (optional: saved .pkl files)
+
+3) Core ML training code (6 models + 6 metrics)
+
+Create: model/train_models.py
+
+import pandas as pd
+import numpy as np
+
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler, LabelEncoder
+from sklearn.pipeline import Pipeline
+
+from sklearn.linear_model import LogisticRegression
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.naive_bayes import GaussianNB
+from sklearn.ensemble import RandomForestClassifier
+
+from sklearn.metrics import (
+    accuracy_score, roc_auc_score, precision_score, recall_score, f1_score,
+    matthews_corrcoef, confusion_matrix, classification_report
+)
+
+# XGBoost: try import, fallback if unavailable
+try:
+    from xgboost import XGBClassifier
+    XGB_AVAILABLE = True
+except Exception:
+    XGB_AVAILABLE = False
+
+
+def compute_metrics(y_true, y_pred, y_proba=None, average="binary"):
+    out = {}
+    out["Accuracy"] = accuracy_score(y_true, y_pred)
+    # AUC only if probabilities available
+    if y_proba is not None:
+        try:
+            out["AUC"] = roc_auc_score(y_true, y_proba, multi_class="ovr" if average != "binary" else "raise")
+        except Exception:
+            # for binary:
+            out["AUC"] = roc_auc_score(y_true, y_proba)
+    else:
+        out["AUC"] = np.nan
+
+    out["Precision"] = precision_score(y_true, y_pred, average=average, zero_division=0)
+    out["Recall"] = recall_score(y_true, y_pred, average=average, zero_division=0)
+    out["F1"] = f1_score(y_true, y_pred, average=average, zero_division=0)
+    out["MCC"] = matthews_corrcoef(y_true, y_pred)
+    return out
+
+
+def get_models(random_state=42):
+    models = {}
+
+    models["Logistic Regression"] = Pipeline([
+        ("scaler", StandardScaler()),
+        ("clf", LogisticRegression(max_iter=2000, random_state=random_state))
+    ])
+
+    models["Decision Tree"] = DecisionTreeClassifier(random_state=random_state)
+
+    models["kNN"] = Pipeline([
+        ("scaler", StandardScaler()),
+        ("clf", KNeighborsClassifier(n_neighbors=5))
+    ])
+
+    # GaussianNB needs dense arrays; pipeline with scaler works fine
+    models["Naive Bayes (Gaussian)"] = Pipeline([
+        ("scaler", StandardScaler()),
+        ("clf", GaussianNB())
+    ])
+
+    models["Random Forest (Ensemble)"] = RandomForestClassifier(
+        n_estimators=200, random_state=random_state
+    )
+
+    if XGB_AVAILABLE:
+        models["XGBoost (Ensemble)"] = XGBClassifier(
+            n_estimators=300,
+            learning_rate=0.05,
+            max_depth=4,
+            subsample=0.9,
+            colsample_bytree=0.9,
+            eval_metric="logloss",
+            random_state=random_state
+        )
+
+    return models
+
+
+def prepare_xy(df, target_col):
+    X = df.drop(columns=[target_col])
+    y = df[target_col]
+
+    # Encode labels if object/categorical
+    if y.dtype == "object" or str(y.dtype).startswith("category"):
+        y = LabelEncoder().fit_transform(y)
+
+    return X, y
+
+
+def train_and_evaluate(df, target_col, test_size=0.2, random_state=42):
+    X, y = prepare_xy(df, target_col)
+
+    # Detect multiclass
+    n_classes = len(np.unique(y))
+    average = "binary" if n_classes == 2 else "macro"
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=test_size, random_state=random_state, stratify=y
+    )
+
+    models = get_models(random_state=random_state)
+
+    results = []
+    artifacts = {}
+
+    for name, model in models.items():
+        model.fit(X_train, y_train)
+
+        y_pred = model.predict(X_test)
+
+        # probas for AUC
+        y_proba = None
+        if hasattr(model, "predict_proba"):
+            prob = model.predict_proba(X_test)
+            if n_classes == 2:
+                y_proba = prob[:, 1]
+            else:
+                y_proba = prob  # multiclass
+
+        metrics = compute_metrics(y_test, y_pred, y_proba=y_proba, average=average)
+        row = {"Model": name, **metrics}
+        results.append(row)
+
+        artifacts[name] = {
+            "model": model,
+            "confusion_matrix": confusion_matrix(y_test, y_pred),
+            "classification_report": classification_report(y_test, y_pred, zero_division=0),
+        }
+
+    results_df = pd.DataFrame(results)
+    return results_df, artifacts
+
+4) Streamlit app (upload CSV + select model + show metrics + confusion matrix/report)
+
+Create: app.py
+
+import streamlit as st
+import pandas as pd
+import numpy as np
+
+from sklearn.datasets import load_breast_cancer
+from model.train_models import train_and_evaluate
+
+st.set_page_config(page_title="ML Assignment 2 - Classification Models", layout="wide")
+
+st.title("ML Assignment 2: Classification Models + Deployment")
+st.write("Upload a CSV (test data) or use the default dataset. Select a model and view metrics + confusion matrix/report.")
+
+# Sidebar controls
+st.sidebar.header("Controls")
+
+use_default = st.sidebar.checkbox("Use default dataset (Breast Cancer)", value=True)
+
+if use_default:
+    data = load_breast_cancer(as_frame=True)
+    df = data.frame.copy()
+    target_col = "target"  # already in frame
+    st.success("Using default Breast Cancer dataset from scikit-learn.")
+else:
+    uploaded = st.sidebar.file_uploader("Upload CSV (must include target column)", type=["csv"])
+    if uploaded is None:
+        st.info("Upload a CSV to continue, or enable default dataset.")
+        st.stop()
+    df = pd.read_csv(uploaded)
+    st.write("Preview of uploaded data:")
+    st.dataframe(df.head(10), use_container_width=True)
+
+    target_col = st.sidebar.selectbox("Select target column", options=list(df.columns))
+
+st.subheader("Dataset Info")
+st.write(f"Rows: **{df.shape[0]}**, Columns: **{df.shape[1]}**")
+st.write(f"Target column: **{target_col}**")
+
+# Train & evaluate
+with st.spinner("Training models and calculating metrics..."):
+    results_df, artifacts = train_and_evaluate(df, target_col)
+
+st.subheader("Model Comparison Table (Required)")
+st.dataframe(results_df, use_container_width=True)
+
+# Model selection
+model_names = list(artifacts.keys())
+selected_model = st.sidebar.selectbox("Select model to view details", options=model_names)
+
+st.subheader(f"Selected Model: {selected_model}")
+
+# Show metrics row
+row = results_df[results_df["Model"] == selected_model].iloc[0].to_dict()
+col1, col2, col3 = st.columns(3)
+col1.metric("Accuracy", f"{row['Accuracy']:.4f}")
+col1.metric("AUC", f"{row['AUC']:.4f}" if not np.isnan(row["AUC"]) else "N/A")
+col2.metric("Precision", f"{row['Precision']:.4f}")
+col2.metric("Recall", f"{row['Recall']:.4f}")
+col3.metric("F1", f"{row['F1']:.4f}")
+col3.metric("MCC", f"{row['MCC']:.4f}")
+
+# Confusion matrix + classification report
+cm = artifacts[selected_model]["confusion_matrix"]
+report = artifacts[selected_model]["classification_report"]
+
+st.subheader("Confusion Matrix (Required)")
+st.write(cm)
+
+st.subheader("Classification Report (Required)")
+st.code(report)
+
+5) requirements.txt (deployment-friendly)
+
+Create: requirements.txt
+
+streamlit
+pandas
+numpy
+scikit-learn
+xgboost
+
+
+If XGBoost deployment fails, pin versions, e.g.:
+
+xgboost==2.0.3
+scikit-learn==1.4.2
+numpy==1.26.4
+pandas==2.2.2
+streamlit==1.36.0
+
+6) README.md template (matches assignment sections)
+
+Create: README.md
+
+# ML Assignment 2 - Classification Models + Streamlit Deployment
+
+## a) Problem statement
+Build and compare multiple classification models on a single dataset, evaluate them using standard metrics, and deploy an interactive Streamlit app.
+
+## b) Dataset description
+Dataset: Breast Cancer Wisconsin (Diagnostic) from scikit-learn  
+Type: Binary Classification  
+Instances: 569  
+Features: 30 numerical features  
+Target: `target` (0/1)
+
+## c) Models used
+1. Logistic Regression  
+2. Decision Tree  
+3. kNN  
+4. Naive Bayes (Gaussian)  
+5. Random Forest (Ensemble)  
+6. XGBoost (Ensemble)
+
+## Comparison Table
+| ML Model Name | Accuracy | AUC | Precision | Recall | F1 | MCC |
+|---|---:|---:|---:|---:|---:|---:|
+| Logistic Regression |  |  |  |  |  |  |
+| Decision Tree |  |  |  |  |  |  |
+| kNN |  |  |  |  |  |  |
+| Naive Bayes |  |  |  |  |  |  |
+| Random Forest (Ensemble) |  |  |  |  |  |  |
+| XGBoost (Ensemble) |  |  |  |  |  |  |
+
+## Observations
+| ML Model Name | Observation about model performance |
+|---|---|
+| Logistic Regression |  |
+| Decision Tree |  |
+| kNN |  |
+| Naive Bayes |  |
+| Random Forest (Ensemble) |  |
+| XGBoost (Ensemble) |  |
+
+## How to run locally
+```bash
+pip install -r requirements.txt
+streamlit run app.py
+
+Deployment
+
+Deployed using Streamlit Community Cloud by selecting this repo + app.py.
+
+
+---
+
+## 7) What to put in your PDF submission (exact order)
+1) **GitHub repo link** (with code, requirements, README)  
+2) **Streamlit live app link**  
+3) **Screenshot from BITS Virtual Lab showing execution** (terminal/app running)  
+4) **Paste README content into PDF** (as required)
+
+---
+
+## 8) Quick tips to avoid plagiarism flags
+- Use your own dataset OR modify preprocessing + UI text.
+- Add small UI customizations (dataset info panel, model explanations, etc.).
+- Make at least a few meaningful commits (not one giant commit).
+
+---
+
+If you tell me which dataset you want (Breast Cancer default vs Kaggle/UCI CSV) and what your **target column name** is, I can tailor:
+- preprocessing steps (categorical encoding, missing values),
+- AUC handling for multiclass,
+- and a filled comparison table + observations format for your README.
